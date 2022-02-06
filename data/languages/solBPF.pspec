@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- See Relax specification: Ghidra/Framework/SoftwareModeling/data/languages/processor_spec.rxg -->
+
+<processor_spec>
+  <programcounter register="PC"/>
+   <default_memory_blocks>
+    <memory_block name="solana_syscalls" start_address="syscall:0x00" length="0xFFFFFFFF" initialized="false"/>
+  </default_memory_blocks>
+</processor_spec>

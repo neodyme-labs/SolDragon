@@ -1,0 +1,325 @@
+# reference: https://github.com/iovisor/bpf-docs/blob/master/eBPF.md
+
+define endian=little;
+
+define alignment=1;
+
+define space ram type=ram_space  size=8  default;
+define space syscall type=ram_space size=1;
+
+define space register type=register_space size=8;
+
+define register offset=0x00 size=8 [ R0 R1  R2 R3 R4 R5 R6 R7 R8 R9 R10 PC ];
+
+#opcode cls
+@define LD    0
+@define LDX   1
+@define ST    2
+@define STX   3
+@define ALU   4
+@define JMP   5
+@define ALU64 7
+
+#opcode arithm: CLS = ALU || ALU64
+@define ADD  0 
+@define SUB  1 
+@define MUL  2 
+@define DIV  3 
+@define OR   4 	
+@define AND  5 
+@define LSH  6 
+@define RSH  7 
+@define NEG  8 
+@define MOD  9 
+@define XOR  10
+@define MOV  11
+@define ARSH 12
+@define END  13
+
+#opcode arithm: CLS = JMP
+@define JA   0
+@define JEQ  1
+@define JGT  2
+@define JGE  3
+@define JSET 4
+@define JNE  5
+@define JSGT 6
+@define JSGE 7
+@define CALL 8
+@define EXIT 9
+@define JLT  10
+@define JLE  11
+@define JSLT 12
+@define JSLE 13
+
+#get's inserted by loader
+@define SYSCALL 15
+
+#arith src
+@define K 0
+@define X 1
+
+#ld/st size
+@define W  0
+@define H  1
+@define B  2
+@define DW 3
+
+#ld/st mode
+@define IMM  0
+@define ABS  1
+@define IND  2
+@define MEM  3
+@define XADD 6
+
+define token instr (64)
+	op          = ( 0, 7)
+	dst         = ( 8,11)
+	src         = (12,15)
+	off         = (16,31) signed
+	imm         = (32,63) signed
+	call_reg     = (32, 35)
+
+#LD/LDX/ST/STX opcode
+#0: LD
+#1: LDX
+#2: ST
+#3: STX
+	op_ldst_cls = ( 0, 2)
+
+#0: W (4 bytes)
+#1: H (2 bytes)
+#2: B (1 bytes)
+#3: DW (8 bytes)
+	op_ldst_sz  = ( 3, 4)
+
+#0: IMM (immediate value)
+#1: ABS (absolute load)
+#2: IND (indirect load)
+#3: MEM (load from / store to memory)
+#4: RESERVED
+#5: RESERVED
+#6_ XADD (exclusive add)
+	op_ldst_mde = ( 5, 7)
+
+#ALU/ALU64/JMP opcode
+#4: ALU
+#5: JMP
+#6: UNUSED
+#7: ALU64
+	op_arit_cls = ( 0, 2)
+
+#0: K (32-bit imm)
+#1: X: src= src_register
+	op_arit_src = ( 3, 3)
+
+	op_arit_opc = ( 4, 7)
+;
+
+define token imm64 (64)
+	zero = ( 0,31)
+	high = (32,63)
+;
+
+attach variables [ src dst  ] [ R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 _ _ _ _ _ ];
+attach variables [ call_reg ] [ R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 _ _ _ _ _ ];
+
+################################################################
+# Macros
+################################################################
+macro push(v) {
+  *:8 R10 = v;
+  R10 = R10 - 8;
+}
+macro pop(v) {
+  R10 = R10 + 8;
+  v = *:8 R10;
+}
+
+macro pushAll(){
+	push(R1);
+	push(R2);
+	push(R3);
+	push(R4);
+	push(R5);
+}
+
+macro popAll(){
+	pop(R5);
+	pop(R4);
+	pop(R3);
+	pop(R2);
+	pop(R1);
+}
+
+################################################################
+# Instructions
+################################################################
+# Load/Store Instructions
+:ldabsb  dst, imm      is dst & imm & op_ldst_cls = $(LD) & op_ldst_mde = $(ABS) & op_ldst_sz = $(B)  { dst = *:1 imm:8; }
+:ldabsh  dst, imm      is dst & imm & op_ldst_cls = $(LD) & op_ldst_mde = $(ABS) & op_ldst_sz = $(H)  { dst = *:2 imm:8; }
+:ldabsw  dst, imm      is dst & imm & op_ldst_cls = $(LD) & op_ldst_mde = $(ABS) & op_ldst_sz = $(W)  { dst = *:4 imm:8; }
+:ldabsdw dst, imm      is dst & imm & op_ldst_cls = $(LD) & op_ldst_mde = $(ABS) & op_ldst_sz = $(DW) { dst = *:8 imm:8; }
+
+:ldindb  src, dst, imm is src & dst & imm & op_ldst_cls = $(LD) & op_ldst_mde = $(IND) & op_ldst_sz = $(B)  { dst = *:1 (src + imm); }
+:ldindh  src, dst, imm is src & dst & imm & op_ldst_cls = $(LD) & op_ldst_mde = $(IND) & op_ldst_sz = $(H)  { dst = *:2 (src + imm); }
+:ldindw  src, dst, imm is src & dst & imm & op_ldst_cls = $(LD) & op_ldst_mde = $(IND) & op_ldst_sz = $(W)  { dst = *:4 (src + imm); }
+:ldinddw src, dst, imm is src & dst & imm & op_ldst_cls = $(LD) & op_ldst_mde = $(IND) & op_ldst_sz = $(DW) { dst = *:8 (src + imm); }
+
+:lddw dst, imm64       is dst & imm & op_ldst_cls = $(LD) & op_ldst_mde = $(IMM) & op_ldst_sz = $(DW) ; high [ imm64 = ( imm | high ); ] { dst = imm64; }
+
+:ldxb  src, dst, off   is src & dst & off & op_ldst_cls = $(LDX) & op_ldst_mde = $(MEM) & op_ldst_sz = $(B)  { dst = *:1 (src + off); }
+:ldxh  src, dst, off   is src & dst & off & op_ldst_cls = $(LDX) & op_ldst_mde = $(MEM) & op_ldst_sz = $(H)  { dst = *:2 (src + off); }
+:ldxw  src, dst, off   is src & dst & off & op_ldst_cls = $(LDX) & op_ldst_mde = $(MEM) & op_ldst_sz = $(W)  { dst = *:4 (src + off); }
+:ldxdw src, dst, off   is src & dst & off & op_ldst_cls = $(LDX) & op_ldst_mde = $(MEM) & op_ldst_sz = $(DW) { dst = *:8 (src + off); }
+
+:stb  imm, dst, off    is imm & dst & off & op_ldst_cls = $(ST) & op_ldst_mde = $(MEM) & op_ldst_sz = $(B)  { *:1 (dst + off) = imm; }
+:sth  imm, dst, off    is imm & dst & off & op_ldst_cls = $(ST) & op_ldst_mde = $(MEM) & op_ldst_sz = $(H)  { *:2 (dst + off) = imm; }
+:stw  imm, dst, off    is imm & dst & off & op_ldst_cls = $(ST) & op_ldst_mde = $(MEM) & op_ldst_sz = $(W)  { *:4 (dst + off) = imm; }
+:stdw imm, dst, off    is imm & dst & off & op_ldst_cls = $(ST) & op_ldst_mde = $(MEM) & op_ldst_sz = $(DW) { *:8 (dst + off) = imm; }
+
+:stxb  src, dst, off   is src & dst & off & op_ldst_cls = $(STX) & op_ldst_mde = $(MEM) & op_ldst_sz = $(B)  { *:1 (dst + off) = src; }
+:stxh  src, dst, off   is src & dst & off & op_ldst_cls = $(STX) & op_ldst_mde = $(MEM) & op_ldst_sz = $(H)  { *:2 (dst + off) = src; }
+:stxw  src, dst, off   is src & dst & off & op_ldst_cls = $(STX) & op_ldst_mde = $(MEM) & op_ldst_sz = $(W)  { *:4 (dst + off) = src; }
+:stxdw src, dst, off   is src & dst & off & op_ldst_cls = $(STX) & op_ldst_mde = $(MEM) & op_ldst_sz = $(DW) { *:8 (dst + off) = src; }
+
+:stxaddw   src, dst, off  is src & dst & off & op_ldst_cls = $(STX) & op_ldst_mde = $(XADD) & op_ldst_sz = $(W) { } #TODO: what is this for?xD
+:stxxadddw src, dst, off  is src & dst & off & op_ldst_cls = $(STX) & op_ldst_mde = $(XADD) & op_ldst_sz = $(DW) { } #TODO: what is this for?xD
+
+# arithmetic Instructions
+
+#32 bit
+:add32 dst, imm        is dst & imm & op_arit_cls= $(ALU) & op_arit_src = $(K) & op_arit_opc = $(ADD) {dst= (dst + imm)&0xFFFFFFFF; }
+:add32 dst, src        is dst & src & op_arit_cls= $(ALU) & op_arit_src = $(X) & op_arit_opc = $(ADD) {dst= (dst + src)&0xFFFFFFFF; }
+
+:sub32 dst, imm        is dst & imm & op_arit_cls= $(ALU) & op_arit_src = $(K) & op_arit_opc = $(SUB) {dst= (dst - imm)&0xFFFFFFFF; }
+:sub32 dst, src        is dst & src & op_arit_cls= $(ALU) & op_arit_src = $(X) & op_arit_opc = $(SUB) {dst= (dst - src)&0xFFFFFFFF; }
+
+:mul32 dst, imm        is dst & imm & op_arit_cls= $(ALU) & op_arit_src = $(K) & op_arit_opc = $(MUL) {dst= (dst * imm)&0xFFFFFFFF; }
+:mul32 dst, src        is dst & src & op_arit_cls= $(ALU) & op_arit_src = $(X) & op_arit_opc = $(MUL) {dst= (dst * src)&0xFFFFFFFF; }
+
+:div32 dst, imm        is dst & imm & op_arit_cls= $(ALU) & op_arit_src = $(K) & op_arit_opc = $(DIV) {dst= (dst / imm)&0xFFFFFFFF; }
+:div32 dst, src        is dst & src & op_arit_cls= $(ALU) & op_arit_src = $(X) & op_arit_opc = $(DIV) {dst= (dst / src)&0xFFFFFFFF; }
+
+:or32 dst, imm         is dst & imm & op_arit_cls= $(ALU) & op_arit_src = $(K) & op_arit_opc = $(OR) {dst= (dst | imm)&0xFFFFFFFF; }
+:or32 dst, src         is dst & src & op_arit_cls= $(ALU) & op_arit_src = $(X) & op_arit_opc = $(OR) {dst= (dst | src)&0xFFFFFFFF; }
+
+:and32 dst, imm        is dst & imm & op_arit_cls= $(ALU) & op_arit_src = $(K) & op_arit_opc = $(AND) {dst= (dst & imm)&0xFFFFFFFF; }
+:and32 dst, src        is dst & src & op_arit_cls= $(ALU) & op_arit_src = $(X) & op_arit_opc = $(AND) {dst= (dst & src)&0xFFFFFFFF; }
+
+:lsh32 dst, imm        is dst & imm & op_arit_cls= $(ALU) & op_arit_src = $(K) & op_arit_opc = $(LSH) {dst= (dst << imm)&0xFFFFFFFF; }
+:lsh32 dst, src        is dst & src & op_arit_cls= $(ALU) & op_arit_src = $(X) & op_arit_opc = $(LSH) {dst= (dst << src)&0xFFFFFFFF; }
+
+:rsh32 dst, imm        is dst & imm & op_arit_cls= $(ALU) & op_arit_src = $(K) & op_arit_opc = $(RSH) {dst= ((dst >> imm) & 0x7fffffff)&0xFFFFFFFF; }
+:rsh32 dst, src        is dst & src & op_arit_cls= $(ALU) & op_arit_src = $(X) & op_arit_opc = $(RSH) {dst= ((dst >> src) & 0x7fffffff)&0xFFFFFFFF; }
+
+:neg32 dst             is dst & op_arit_cls= $(ALU) & op_arit_opc = $(NEG) {dst= (~dst)&0xFFFFFFFF; }
+
+:mod32 dst, imm        is dst & imm & op_arit_cls= $(ALU) & op_arit_src = $(K) & op_arit_opc = $(MOD) {dst= (dst % imm)&0xFFFFFFFF; }
+:mod32 dst, src        is dst & src & op_arit_cls= $(ALU) & op_arit_src = $(X) & op_arit_opc = $(MOD) {dst= (dst % src)&0xFFFFFFFF; }
+
+:xor32 dst, imm        is dst & imm & op_arit_cls= $(ALU) & op_arit_src = $(K) & op_arit_opc = $(XOR) {dst= (dst ^ imm)&0xFFFFFFFF; }
+:xor32 dst, src        is dst & src & op_arit_cls= $(ALU) & op_arit_src = $(X) & op_arit_opc = $(XOR) {dst= (dst ^ src)&0xFFFFFFFF; }
+
+:mov32 dst, imm        is dst & imm & op_arit_cls= $(ALU) & op_arit_src = $(K) & op_arit_opc = $(MOV) {dst= imm:8&0xFFFFFFFF; }
+:mov32 dst, src        is dst & src & op_arit_cls= $(ALU) & op_arit_src = $(X) & op_arit_opc = $(MOV) {dst= src:8&0xFFFFFFFF; }
+
+:arsh32 dst, imm       is dst & imm & op_arit_cls= $(ALU) & op_arit_src = $(K) & op_arit_opc = $(ARSH) {dst= (dst >> imm)&0xFFFFFFFF; }
+:arsh32 dst, src       is dst & src & op_arit_cls= $(ALU) & op_arit_src = $(X) & op_arit_opc = $(ARSH) {dst= (dst >> src)&0xFFFFFFFF; }
+
+#:le dst is op_arit_cls= $(ALU) & op_arit_src = $(K) & op_arit_opc = $(END) { dst = dst; } #TODO: implement endianess conversion
+#:be dst is op_arit_cls= $(ALU) & op_arit_src = $(X) & op_arit_opc = $(END) { dst = dst; } #TODO: implement endianess conversion
+
+
+#64 bit
+:add64 dst, imm        is dst & imm & op_arit_cls= $(ALU64) & op_arit_src = $(K) & op_arit_opc = $(ADD) { dst = (dst + imm); }
+:add64 dst, src        is dst & src & op_arit_cls= $(ALU64) & op_arit_src = $(X) & op_arit_opc = $(ADD) { dst = (dst + src); }
+
+:sub64 dst, imm        is dst & imm & op_arit_cls= $(ALU64) & op_arit_src = $(K) & op_arit_opc = $(SUB) { dst = (dst - imm); }
+:sub64 dst, src        is dst & src & op_arit_cls= $(ALU64) & op_arit_src = $(X) & op_arit_opc = $(SUB) { dst = (dst - src); }
+
+:mul64 dst, imm        is dst & imm & op_arit_cls= $(ALU64) & op_arit_src = $(K) & op_arit_opc = $(MUL) { dst = (dst * imm); }
+:mul64 dst, src        is dst & src & op_arit_cls= $(ALU64) & op_arit_src = $(X) & op_arit_opc = $(MUL) { dst = (dst * src); }
+
+:div64 dst, imm        is dst & imm & op_arit_cls= $(ALU64) & op_arit_src = $(K) & op_arit_opc = $(DIV) { dst = (dst / imm); }
+:div64 dst, src        is dst & src & op_arit_cls= $(ALU64) & op_arit_src = $(X) & op_arit_opc = $(DIV) { dst = (dst / src); }
+
+:or64 dst, imm         is dst & imm & op_arit_cls= $(ALU64) & op_arit_src = $(K) & op_arit_opc = $(OR) { dst = (dst | imm); }
+:or64 dst, src         is dst & src & op_arit_cls= $(ALU64) & op_arit_src = $(X) & op_arit_opc = $(OR) { dst = (dst | src); }
+
+:and64 dst, imm        is dst & imm & op_arit_cls= $(ALU64) & op_arit_src = $(K) & op_arit_opc = $(AND) { dst = (dst & imm); }
+:and64 dst, src        is dst & src & op_arit_cls= $(ALU64) & op_arit_src = $(X) & op_arit_opc = $(AND) { dst = (dst & src); }
+
+:lsh64 dst, imm        is dst & imm & op_arit_cls= $(ALU64) & op_arit_src = $(K) & op_arit_opc = $(LSH) { dst = (dst << imm); }
+:lsh64 dst, src        is dst & src & op_arit_cls= $(ALU64) & op_arit_src = $(X) & op_arit_opc = $(LSH) { dst = (dst << src); }
+
+:rsh64 dst, imm        is dst & imm & op_arit_cls= $(ALU64) & op_arit_src = $(K) & op_arit_opc = $(RSH) { dst = ((dst >> imm) & 0x7fffffffffffffff); }
+:rsh64 dst, src        is dst & src & op_arit_cls= $(ALU64) & op_arit_src = $(X) & op_arit_opc = $(RSH) { dst = ((dst >> src) & 0x7fffffffffffffff); }
+
+:neg64 dst             is dst & op_arit_cls= $(ALU64) & op_arit_opc = $(NEG) { dst = (~dst); }
+
+:mod64 dst, imm        is dst & imm & op_arit_cls= $(ALU64) & op_arit_src = $(K) & op_arit_opc = $(MOD) { dst = (dst % imm); }
+:mod64 dst, src        is dst & src & op_arit_cls= $(ALU64) & op_arit_src = $(X) & op_arit_opc = $(MOD) { dst = (dst % src); }
+
+:xor64 dst, imm        is dst & imm & op_arit_cls= $(ALU64) & op_arit_src = $(K) & op_arit_opc = $(XOR) { dst = (dst ^ imm); }
+:xor64 dst, src        is dst & src & op_arit_cls= $(ALU64) & op_arit_src = $(X) & op_arit_opc = $(XOR) { dst = (dst ^ src); }
+
+:mov64 dst, imm        is dst & imm & op_arit_cls= $(ALU64) & op_arit_src = $(K) & op_arit_opc = $(MOV) { dst = imm; }
+:mov64 dst, src        is dst & src & op_arit_cls= $(ALU64) & op_arit_src = $(X) & op_arit_opc = $(MOV) { dst = (src:8); }
+
+:arsh64 dst, imm       is dst & imm & op_arit_cls= $(ALU64) & op_arit_src = $(K) & op_arit_opc = $(ARSH) { dst = (dst >> imm); }
+:arsh64 dst, src       is dst & src & op_arit_cls= $(ALU64) & op_arit_src = $(X) & op_arit_opc = $(ARSH) { dst = (dst >> src); }
+
+#jumps
+jdest: rel is off [ rel = inst_next + off*8; ] {
+    export *:8 rel;
+}
+
+:ja jdest              is jdest & op_arit_cls = $(JMP) & op_arit_opc = $(JA) { goto jdest; }
+
+:jeq jdest, dst, imm   is jdest & dst & imm & op_arit_cls = $(JMP) & op_arit_src = $(K) & op_arit_opc = $(JEQ) { if (dst == imm) goto jdest; }
+:jeq jdest, dst, src   is jdest & dst & src & op_arit_cls = $(JMP) & op_arit_src = $(X) & op_arit_opc = $(JEQ) { if (dst == src) goto jdest; }
+
+:jgt jdest, dst, imm   is jdest & dst & imm & op_arit_cls = $(JMP) & op_arit_src = $(K) & op_arit_opc = $(JGT) { if (dst > imm) goto jdest; }
+:jgt jdest, dst, src   is jdest & dst & src & op_arit_cls = $(JMP) & op_arit_src = $(X) & op_arit_opc = $(JGT) { if (dst > src) goto jdest; }
+
+:jge jdest, dst, imm   is jdest & dst & imm & op_arit_cls = $(JMP) & op_arit_src = $(K) & op_arit_opc = $(JGE) { if (dst >= imm) goto jdest; }
+:jge jdest, dst, src   is jdest & dst & src & op_arit_cls = $(JMP) & op_arit_src = $(X) & op_arit_opc = $(JGE) { if (dst >= src) goto jdest; }
+
+:jlt jdest, dst, imm   is jdest & dst & imm & op_arit_cls = $(JMP) & op_arit_src = $(K) & op_arit_opc = $(JLT) { if (dst < imm) goto jdest; }
+:jlt jdest, dst, src   is jdest & dst & src & op_arit_cls = $(JMP) & op_arit_src = $(X) & op_arit_opc = $(JLT) { if (dst < src) goto jdest; }
+
+:jle jdest, dst, imm   is jdest & dst & imm & op_arit_cls = $(JMP) & op_arit_src = $(K) & op_arit_opc = $(JLE) { if (dst <= imm) goto jdest; }
+:jle jdest, dst, src   is jdest & dst & src & op_arit_cls = $(JMP) & op_arit_src = $(X) & op_arit_opc = $(JLE) { if (dst <= src) goto jdest; }
+
+:jset jdest, dst, imm  is jdest & dst & imm & op_arit_cls = $(JMP) & op_arit_src = $(K) & op_arit_opc = $(JSET) { if ((dst & imm) != 0) goto jdest; }
+:jset jdest, dst, src  is jdest & dst & src & op_arit_cls = $(JMP) & op_arit_src = $(X) & op_arit_opc = $(JSET) { if ((dst & src) != 0) goto jdest; }
+
+:jne jdest, dst, imm   is jdest & dst & imm & op_arit_cls = $(JMP) & op_arit_src = $(K) & op_arit_opc = $(JNE) { if (dst != imm) goto jdest; }
+:jne jdest, dst, src   is jdest & dst & src & op_arit_cls = $(JMP) & op_arit_src = $(X) & op_arit_opc = $(JNE) { if (dst != src) goto jdest; }
+
+:jsgt jdest, dst, imm  is jdest & dst & imm & op_arit_cls = $(JMP) & op_arit_src = $(K) & op_arit_opc = $(JSGT) { if (dst s> imm) goto jdest; }
+:jsgt jdest, dst, src  is jdest & dst & src & op_arit_cls = $(JMP) & op_arit_src = $(X) & op_arit_opc = $(JSGT) { if (dst s> src) goto jdest; }
+
+:jsge jdest, dst, imm  is jdest & dst & imm & op_arit_cls = $(JMP) & op_arit_src = $(K) & op_arit_opc = $(JSGE) { if (dst s>= imm) goto jdest; }
+:jsge jdest, dst, src  is jdest & dst & src & op_arit_cls = $(JMP) & op_arit_src = $(X) & op_arit_opc = $(JSGE) { if (dst s>= src) goto jdest; }
+
+:jslt jdest, dst, imm  is jdest & dst & imm & op_arit_cls = $(JMP) & op_arit_src = $(K) & op_arit_opc = $(JSLT) { if (dst s< imm) goto jdest; }
+:jslt jdest, dst, src  is jdest & dst & src & op_arit_cls = $(JMP) & op_arit_src = $(X) & op_arit_opc = $(JSLT) { if (dst s< src) goto jdest; }
+
+:jsle jdest, dst, imm  is jdest & dst & imm & op_arit_cls = $(JMP) & op_arit_src = $(K) & op_arit_opc = $(JSLE) { if (dst s<= imm) goto jdest; }
+:jsle jdest, dst, src  is jdest & dst & src & op_arit_cls = $(JMP) & op_arit_src = $(X) & op_arit_opc = $(JSLE) { if (dst s<= src) goto jdest; }
+
+#TODO stack stuff, syscalls, ...
+
+addr: rel is imm [rel = inst_next + imm*8; ] { export *:8 rel; } 
+
+#call_reg
+:call call_reg is call_reg & op_arit_cls = $(JMP) & op_arit_src = $(X) & op_arit_opc = $(CALL) { pushAll(); push(&:8 inst_next); call [call_reg]; }
+
+:call addr is addr & op_arit_cls = $(JMP) & op_arit_src = $(K) & op_arit_opc = $(CALL) { pushAll(); push(&:8 inst_next); call addr; }
+
+syscall_fn: imm is imm { export *[syscall]:1 imm; } 
+:syscall syscall_fn is syscall_fn & op_arit_cls = $(JMP) & op_arit_src = $(K) & op_arit_opc = $(SYSCALL) { call syscall_fn; }
+
+:exit is op_arit_cls = $(JMP) & op_arit_opc = $(EXIT) { pop(PC); popAll(); return [*:8 R10]; }

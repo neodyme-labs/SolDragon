@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- See Relax specification: Ghidra/Framework/SoftwareModeling/data/languages/language_definitions.rxg -->
+
+<language_definitions>
+   <language processor="solBPF"
+            endian="little"
+            size="64"
+            variant="default"
+            version="1.0"
+            slafile="solBPF.sla"
+            processorspec="solBPF.pspec"
+            id="solBPF:LE:64:default">
+    <description>Solana eBPF Language Module</description>
+    <compiler name="default" spec="solBPF.cspec" id="default"/>
+  </language> 
+</language_definitions>

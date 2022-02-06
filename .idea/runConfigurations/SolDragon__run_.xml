@@ -1,0 +1,16 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="SolDragon [run]" type="Application" factoryName="Application">
+    <option name="ALTERNATIVE_JRE_PATH" value="11" />
+    <option name="ALTERNATIVE_JRE_PATH_ENABLED" value="true" />
+    <classpathModifications>
+      <entry path="$PROJECT_DIR$/lib" />
+    </classpathModifications>
+    <option name="MAIN_CLASS_NAME" value="ghidra.GhidraLauncher" />
+    <module name="SolDragon.main" />
+    <option name="PROGRAM_PARAMETERS" value="ghidra.GhidraRun" />
+    <option name="VM_PARAMETERS" value="-Djava.system.class.loader=ghidra.GhidraClassLoader" />
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>

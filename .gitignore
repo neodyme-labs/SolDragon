@@ -1,0 +1,7 @@
+.gradle
+/build/
+/dist/
+
+*.jar
+
+!gradle-wrapper.jar
