@@ -18,5 +18,5 @@ Solana Ghidra Stuff (WIP)
 - [ ] implement partial emulation for better decompilation
 
 ## Building
-Set `GHIDRA_INSTALL_DIR` in you home `gradle.properties` or as an environment variable to point to you Ghidra installation.
+Set `GHIDRA_INSTALL_DIR` in your home `gradle.properties` or as an environment variable to point to your Ghidra installation.
 Run `./gradlew buildExtension` to build the extension.
